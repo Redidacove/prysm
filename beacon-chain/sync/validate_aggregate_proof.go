@@ -14,16 +14,16 @@ import (
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/core/signing"
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/v5/config/features"
 	"github.com/prysmaticlabs/prysm/v5/config/params"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/crypto/bls"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
 	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
-	"github.com/prysmaticlabs/prysm/v5/runtime/version"
 	prysmTime "github.com/prysmaticlabs/prysm/v5/time"
 	"github.com/prysmaticlabs/prysm/v5/time/slots"
-	"go.opencensus.io/trace"
 )
 
 // validateAggregateAndProof verifies the aggregated signature and the selection proof is valid before forwarding to the
@@ -57,11 +57,10 @@ func (s *Service) validateAggregateAndProof(ctx context.Context, pid peer.ID, ms
 	}
 
 	aggregate := m.AggregateAttestationAndProof().AggregateVal()
-	data := aggregate.GetData()
-
 	if err := helpers.ValidateNilAttestation(aggregate); err != nil {
 		return pubsub.ValidationReject, err
 	}
+	data := aggregate.GetData()
 	// Do not process slot 0 aggregates.
 	if data.Slot == 0 {
 		return pubsub.ValidationIgnore, nil
@@ -69,18 +68,12 @@ func (s *Service) validateAggregateAndProof(ctx context.Context, pid peer.ID, ms
 
 	// Broadcast the aggregated attestation on a feed to notify other services in the beacon node
 	// of a received aggregated attestation.
-	// TODO: this will be extended to Electra in a later PR
-	if m.Version() == version.Phase0 {
-		phase0Att, ok := m.(*ethpb.SignedAggregateAttestationAndProof)
-		if ok {
-			s.cfg.attestationNotifier.OperationFeed().Send(&feed.Event{
-				Type: operation.AggregatedAttReceived,
-				Data: &operation.AggregatedAttReceivedData{
-					Attestation: phase0Att.Message,
-				},
-			})
-		}
-	}
+	s.cfg.attestationNotifier.OperationFeed().Send(&feed.Event{
+		Type: operation.AggregatedAttReceived,
+		Data: &operation.AggregatedAttReceivedData{
+			Attestation: m.AggregateAttestationAndProof(),
+		},
+	})
 
 	if err := helpers.ValidateSlotTargetEpoch(data); err != nil {
 		return pubsub.ValidationReject, err
@@ -109,15 +102,31 @@ func (s *Service) validateAggregateAndProof(ctx context.Context, pid peer.ID, ms
 		return pubsub.ValidationReject, errors.New("bad block referenced in attestation data")
 	}
 
-	// Verify aggregate attestation has not already been seen via aggregate gossip, within a block, or through the creation locally.
-	seen, err := s.cfg.attPool.HasAggregatedAttestation(aggregate)
-	if err != nil {
-		tracing.AnnotateError(span, err)
-		return pubsub.ValidationIgnore, err
+	if features.Get().EnableExperimentalAttestationPool {
+		// It is possible that some aggregate in the pool already covers all bits
+		// of this aggregate, in which case we can ignore it.
+		isRedundant, err := s.cfg.attestationCache.AggregateIsRedundant(aggregate)
+		if err != nil {
+			tracing.AnnotateError(span, err)
+			return pubsub.ValidationIgnore, err
+		}
+		if isRedundant {
+			return pubsub.ValidationIgnore, nil
+		}
+	} else {
+		// Verify aggregate attestation has not already been seen via aggregate gossip, within a block, or through the creation locally.
+		seen, err := s.cfg.attPool.HasAggregatedAttestation(aggregate)
+		if err != nil {
+			tracing.AnnotateError(span, err)
+			return pubsub.ValidationIgnore, err
+		}
+		if seen {
+			return pubsub.ValidationIgnore, nil
+		}
 	}
-	if seen {
-		return pubsub.ValidationIgnore, nil
-	}
+
+	// Verify the block being voted on is in the beacon chain.
+	// If not, store this attestation in the map of pending attestations.
 	if !s.validateBlockInAttestation(ctx, m) {
 		return pubsub.ValidationIgnore, nil
 	}
@@ -167,31 +176,31 @@ func (s *Service) validateAggregatedAtt(ctx context.Context, signed ethpb.Signed
 		return pubsub.ValidationIgnore, err
 	}
 
+	committeeIndex, _, result, err := s.validateCommitteeIndexAndCount(ctx, aggregate, bs)
+	if result != pubsub.ValidationAccept {
+		wrappedErr := errors.Wrapf(err, "could not validate committee index")
+		tracing.AnnotateError(span, wrappedErr)
+		return result, err
+	}
+
+	committee, err := helpers.BeaconCommitteeFromState(ctx, bs, aggregate.GetData().Slot, committeeIndex)
+	if err != nil {
+		tracing.AnnotateError(span, err)
+		return pubsub.ValidationIgnore, err
+	}
+
+	// Verify number of aggregation bits matches the committee size.
+	if err = helpers.VerifyBitfieldLength(aggregate.GetAggregationBits(), uint64(len(committee))); err != nil {
+		tracing.AnnotateError(span, err)
+		return pubsub.ValidationReject, err
+	}
+
 	// Verify validator index is within the beacon committee.
-	result, err := s.validateIndexInCommittee(ctx, bs, aggregate, aggregatorIndex)
+	result, err = s.validateIndexInCommittee(ctx, aggregate, aggregatorIndex, committee)
 	if result != pubsub.ValidationAccept {
 		wrappedErr := errors.Wrapf(err, "could not validate index in committee")
 		tracing.AnnotateError(span, wrappedErr)
 		return result, wrappedErr
-	}
-
-	var committeeIndex primitives.CommitteeIndex
-	if signed.Version() >= version.Electra {
-		a, ok := aggregate.(*ethpb.AttestationElectra)
-		// This will never fail in practice because we asserted the version
-		if !ok {
-			err := fmt.Errorf("aggregate attestation has wrong type (expected %T, got %T)", &ethpb.AttestationElectra{}, aggregate)
-			tracing.AnnotateError(span, err)
-			return pubsub.ValidationIgnore, err
-		}
-		committeeIndex, result, err = validateCommitteeIndexElectra(ctx, a)
-		if result != pubsub.ValidationAccept {
-			wrappedErr := errors.Wrapf(err, "could not validate committee index for Electra version")
-			tracing.AnnotateError(span, wrappedErr)
-			return result, wrappedErr
-		}
-	} else {
-		committeeIndex = data.CommitteeIndex
 	}
 
 	// Verify selection proof reflects to the right validator.
@@ -199,7 +208,7 @@ func (s *Service) validateAggregatedAtt(ctx context.Context, signed ethpb.Signed
 		ctx,
 		bs,
 		data.Slot,
-		committeeIndex,
+		committee,
 		aggregatorIndex,
 		aggregateAndProof.GetSelectionProof(),
 	)
@@ -230,6 +239,8 @@ func (s *Service) validateAggregatedAtt(ctx context.Context, signed ethpb.Signed
 	return s.validateWithBatchVerifier(ctx, "aggregate", set)
 }
 
+// validateBlocksInAttestation checks if the block being voted on is in the beaconDB.
+// If not, it store this attestation in the map of pending attestations.
 func (s *Service) validateBlockInAttestation(ctx context.Context, satt ethpb.SignedAggregateAttAndProof) bool {
 	// Verify the block being voted and the processed state is in beaconDB. The block should have passed validation if it's in the beaconDB.
 	blockRoot := bytesutil.ToBytes32(satt.AggregateAttestationAndProof().AggregateVal().GetData().BeaconBlockRoot)
@@ -266,19 +277,9 @@ func (s *Service) setAggregatorIndexEpochSeen(epoch primitives.Epoch, aggregator
 //   - [REJECT] The aggregate attestation has participants -- that is, len(get_attesting_indices(state, aggregate.data, aggregate.aggregation_bits)) >= 1.
 //   - [REJECT] The aggregator's validator index is within the committee --
 //     i.e. `aggregate_and_proof.aggregator_index in get_beacon_committee(state, aggregate.data.slot, aggregate.data.index)`.
-func (s *Service) validateIndexInCommittee(ctx context.Context, bs state.ReadOnlyBeaconState, a ethpb.Att, validatorIndex primitives.ValidatorIndex) (pubsub.ValidationResult, error) {
-	ctx, span := trace.StartSpan(ctx, "sync.validateIndexInCommittee")
+func (s *Service) validateIndexInCommittee(ctx context.Context, a ethpb.Att, validatorIndex primitives.ValidatorIndex, committee []primitives.ValidatorIndex) (pubsub.ValidationResult, error) {
+	_, span := trace.StartSpan(ctx, "sync.validateIndexInCommittee")
 	defer span.End()
-
-	_, result, err := s.validateCommitteeIndex(ctx, a, bs)
-	if result != pubsub.ValidationAccept {
-		return result, err
-	}
-
-	committee, result, err := s.validateBitLength(ctx, bs, a.GetData().Slot, a.GetData().CommitteeIndex, a.GetAggregationBits())
-	if result != pubsub.ValidationAccept {
-		return result, err
-	}
 
 	if a.GetAggregationBits().Count() == 0 {
 		return pubsub.ValidationReject, errors.New("no attesting indices")
@@ -304,17 +305,13 @@ func validateSelectionIndex(
 	ctx context.Context,
 	bs state.ReadOnlyBeaconState,
 	slot primitives.Slot,
-	committeeIndex primitives.CommitteeIndex,
+	committee []primitives.ValidatorIndex,
 	validatorIndex primitives.ValidatorIndex,
 	proof []byte,
 ) (*bls.SignatureBatch, error) {
-	ctx, span := trace.StartSpan(ctx, "sync.validateSelectionIndex")
+	_, span := trace.StartSpan(ctx, "sync.validateSelectionIndex")
 	defer span.End()
 
-	committee, err := helpers.BeaconCommitteeFromState(ctx, bs, slot, committeeIndex)
-	if err != nil {
-		return nil, err
-	}
 	aggregator, err := helpers.IsAggregator(uint64(len(committee)), proof)
 	if err != nil {
 		return nil, err
@@ -326,11 +323,12 @@ func validateSelectionIndex(
 	domain := params.BeaconConfig().DomainSelectionProof
 	epoch := slots.ToEpoch(slot)
 
-	v, err := bs.ValidatorAtIndex(validatorIndex)
+	v, err := bs.ValidatorAtIndexReadOnly(validatorIndex)
 	if err != nil {
 		return nil, err
 	}
-	publicKey, err := bls.PublicKeyFromBytes(v.PublicKey)
+	pk := v.PublicKey()
+	publicKey, err := bls.PublicKeyFromBytes(pk[:])
 	if err != nil {
 		return nil, err
 	}
@@ -356,11 +354,12 @@ func validateSelectionIndex(
 func aggSigSet(s state.ReadOnlyBeaconState, a ethpb.SignedAggregateAttAndProof) (*bls.SignatureBatch, error) {
 	aggregateAndProof := a.AggregateAttestationAndProof()
 
-	v, err := s.ValidatorAtIndex(aggregateAndProof.GetAggregatorIndex())
+	v, err := s.ValidatorAtIndexReadOnly(aggregateAndProof.GetAggregatorIndex())
 	if err != nil {
 		return nil, err
 	}
-	publicKey, err := bls.PublicKeyFromBytes(v.PublicKey)
+	pk := v.PublicKey()
+	publicKey, err := bls.PublicKeyFromBytes(pk[:])
 	if err != nil {
 		return nil, err
 	}
