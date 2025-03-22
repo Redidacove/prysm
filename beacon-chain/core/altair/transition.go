@@ -7,7 +7,7 @@ import (
 	e "github.com/prysmaticlabs/prysm/v5/beacon-chain/core/epoch"
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/core/epoch/precompute"
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/state"
-	"go.opencensus.io/trace"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 )
 
 // ProcessEpoch describes the per epoch operations that are performed on the beacon state.
@@ -69,12 +69,7 @@ func ProcessEpoch(ctx context.Context, state state.BeaconState) error {
 	}
 
 	// Modified in Altair and Bellatrix.
-	proportionalSlashingMultiplier, err := state.ProportionalSlashingMultiplier()
-	if err != nil {
-		return err
-	}
-	state, err = e.ProcessSlashings(state, proportionalSlashingMultiplier)
-	if err != nil {
+	if err := e.ProcessSlashings(state); err != nil {
 		return err
 	}
 	state, err = e.ProcessEth1DataReset(state)

@@ -9,13 +9,15 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/v5/config/features"
 	"github.com/prysmaticlabs/prysm/v5/config/params"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
+	"github.com/prysmaticlabs/prysm/v5/runtime/version"
 	"github.com/prysmaticlabs/prysm/v5/time/slots"
 	"github.com/sirupsen/logrus"
-	"go.opencensus.io/trace"
 )
 
 // reorgLateBlockCountAttestations is the time until the end of the slot in which we count
@@ -165,7 +167,13 @@ func (s *Service) UpdateHead(ctx context.Context, proposingSlot primitives.Slot)
 
 // This processes fork choice attestations from the pool to account for validator votes and fork choice.
 func (s *Service) processAttestations(ctx context.Context, disparity time.Duration) {
-	atts := s.cfg.AttPool.ForkchoiceAttestations()
+	var atts []ethpb.Att
+	if features.Get().EnableExperimentalAttestationPool {
+		atts = s.cfg.AttestationCache.ForkchoiceAttestations()
+	} else {
+		atts = s.cfg.AttPool.ForkchoiceAttestations()
+	}
+
 	for _, a := range atts {
 		// Based on the spec, don't process the attestation until the subsequent slot.
 		// This delays consideration in the fork choice until their slot is in the past.
@@ -181,7 +189,11 @@ func (s *Service) processAttestations(ctx context.Context, disparity time.Durati
 			continue
 		}
 
-		if err := s.cfg.AttPool.DeleteForkchoiceAttestation(a); err != nil {
+		if features.Get().EnableExperimentalAttestationPool {
+			if err := s.cfg.AttestationCache.DeleteForkchoiceAttestation(a); err != nil {
+				log.WithError(err).Error("Could not delete fork choice attestation in pool")
+			}
+		} else if err := s.cfg.AttPool.DeleteForkchoiceAttestation(a); err != nil {
 			log.WithError(err).Error("Could not delete fork choice attestation in pool")
 		}
 
@@ -190,13 +202,26 @@ func (s *Service) processAttestations(ctx context.Context, disparity time.Durati
 		}
 
 		if err := s.receiveAttestationNoPubsub(ctx, a, disparity); err != nil {
-			log.WithFields(logrus.Fields{
-				"slot":             a.GetData().Slot,
-				"committeeIndex":   a.GetData().CommitteeIndex,
-				"beaconBlockRoot":  fmt.Sprintf("%#x", bytesutil.Trunc(a.GetData().BeaconBlockRoot)),
-				"targetRoot":       fmt.Sprintf("%#x", bytesutil.Trunc(a.GetData().Target.Root)),
-				"aggregationCount": a.GetAggregationBits().Count(),
-			}).WithError(err).Warn("Could not process attestation for fork choice")
+			var fields logrus.Fields
+			if a.Version() >= version.Electra {
+				fields = logrus.Fields{
+					"slot":             a.GetData().Slot,
+					"committeeCount":   a.CommitteeBitsVal().Count(),
+					"committeeIndices": a.CommitteeBitsVal().BitIndices(),
+					"beaconBlockRoot":  fmt.Sprintf("%#x", bytesutil.Trunc(a.GetData().BeaconBlockRoot)),
+					"targetRoot":       fmt.Sprintf("%#x", bytesutil.Trunc(a.GetData().Target.Root)),
+					"aggregatedCount":  a.GetAggregationBits().Count(),
+				}
+			} else {
+				fields = logrus.Fields{
+					"slot":            a.GetData().Slot,
+					"committeeIndex":  a.GetData().CommitteeIndex,
+					"beaconBlockRoot": fmt.Sprintf("%#x", bytesutil.Trunc(a.GetData().BeaconBlockRoot)),
+					"targetRoot":      fmt.Sprintf("%#x", bytesutil.Trunc(a.GetData().Target.Root)),
+					"aggregatedCount": a.GetAggregationBits().Count(),
+				}
+			}
+			log.WithFields(fields).WithError(err).Warn("Could not process attestation for fork choice")
 		}
 	}
 }
