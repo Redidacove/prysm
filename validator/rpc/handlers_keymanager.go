@@ -21,13 +21,13 @@ import (
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/validator"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	"github.com/prysmaticlabs/prysm/v5/network/httputil"
 	"github.com/prysmaticlabs/prysm/v5/validator/client"
 	"github.com/prysmaticlabs/prysm/v5/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/v5/validator/keymanager/derived"
 	slashingprotection "github.com/prysmaticlabs/prysm/v5/validator/slashing-protection-history"
 	"github.com/prysmaticlabs/prysm/v5/validator/slashing-protection-history/format"
-	"go.opencensus.io/trace"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -50,7 +50,11 @@ func (s *Server) ListKeystores(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.wallet.KeymanagerKind() != keymanager.Derived && s.wallet.KeymanagerKind() != keymanager.Local {
-		httputil.HandleError(w, errors.Wrap(err, "Prysm validator keys are not stored locally with this keymanager type").Error(), http.StatusInternalServerError)
+		log.Debugf("List keystores keymanager api expected wallet type %s but got %s", s.wallet.KeymanagerKind().String(), keymanager.Local.String())
+		response := &ListKeystoresResponse{
+			Data: make([]*Keystore, 0),
+		}
+		httputil.WriteJson(w, response)
 		return
 	}
 	pubKeys, err := km.FetchValidatingPublicKeys(ctx)
@@ -402,7 +406,11 @@ func (s *Server) ListRemoteKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.wallet.KeymanagerKind() != keymanager.Web3Signer {
-		httputil.HandleError(w, "Prysm Wallet is not of type Web3Signer. Please execute validator client with web3signer flags.", http.StatusInternalServerError)
+		log.Debugf("List remote keys keymanager api expected wallet type %s but got %s", s.wallet.KeymanagerKind().String(), keymanager.Web3Signer.String())
+		response := &ListKeystoresResponse{
+			Data: make([]*Keystore, 0),
+		}
+		httputil.WriteJson(w, response)
 		return
 	}
 	pubKeys, err := km.FetchValidatingPublicKeys(ctx)
