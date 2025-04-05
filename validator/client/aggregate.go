@@ -13,13 +13,13 @@ import (
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/crypto/bls"
 	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	"github.com/prysmaticlabs/prysm/v5/network/httputil"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	validatorpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1/validator-client"
 	"github.com/prysmaticlabs/prysm/v5/runtime/version"
 	prysmTime "github.com/prysmaticlabs/prysm/v5/time"
 	"github.com/prysmaticlabs/prysm/v5/time/slots"
-	"go.opencensus.io/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -32,7 +32,7 @@ func (v *validator) SubmitAggregateAndProof(ctx context.Context, slot primitives
 	ctx, span := trace.StartSpan(ctx, "validator.SubmitAggregateAndProof")
 	defer span.End()
 
-	span.AddAttributes(trace.StringAttribute("validator", fmt.Sprintf("%#x", pubKey)))
+	span.SetAttributes(trace.StringAttribute("validator", fmt.Sprintf("%#x", pubKey)))
 	fmtKey := fmt.Sprintf("%#x", pubKey[:])
 
 	duty, err := v.duty(pubKey)
@@ -88,6 +88,7 @@ func (v *validator) SubmitAggregateAndProof(ctx context.Context, slot primitives
 		PublicKey:      pubKey[:],
 		SlotSignature:  slotSig,
 	}
+	// TODO: look at renaming SubmitAggregateSelectionProof functions as they are GET beacon API
 	var agg ethpb.AggregateAttAndProof
 	if postElectra {
 		res, err := v.validatorClient.SubmitAggregateSelectionProofElectra(ctx, aggSelectionRequest, duty.ValidatorIndex, uint64(len(duty.Committee)))
