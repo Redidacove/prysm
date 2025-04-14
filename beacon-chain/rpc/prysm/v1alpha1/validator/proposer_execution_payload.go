@@ -21,11 +21,11 @@ import (
 	payloadattribute "github.com/prysmaticlabs/prysm/v5/consensus-types/payload-attribute"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	enginev1 "github.com/prysmaticlabs/prysm/v5/proto/engine/v1"
 	"github.com/prysmaticlabs/prysm/v5/runtime/version"
 	"github.com/prysmaticlabs/prysm/v5/time/slots"
 	"github.com/sirupsen/logrus"
-	"go.opencensus.io/trace"
 )
 
 var (
@@ -59,20 +59,31 @@ func (vs *Server) getLocalPayload(ctx context.Context, blk interfaces.ReadOnlyBe
 	slot := blk.Slot()
 	vIdx := blk.ProposerIndex()
 	headRoot := blk.ParentRoot()
-	logFields := logrus.Fields{
-		"validatorIndex": vIdx,
-		"slot":           slot,
-		"headRoot":       fmt.Sprintf("%#x", headRoot),
-	}
-	payloadId, ok := vs.PayloadIDCache.PayloadID(slot, headRoot)
 
-	val, tracked := vs.TrackedValidatorsCache.Validator(vIdx)
+	return vs.getLocalPayloadFromEngine(ctx, st, headRoot, slot, vIdx)
+}
+
+// This returns the local execution payload of a slot, proposer ID, and parent root assuming payload Is cached.
+// If the payload ID is not cached, the function will prepare a new payload through local EL engine and return it by using the head state.
+func (vs *Server) getLocalPayloadFromEngine(
+	ctx context.Context,
+	st state.BeaconState,
+	parentRoot [32]byte,
+	slot primitives.Slot,
+	proposerId primitives.ValidatorIndex) (*consensusblocks.GetPayloadResponse, error) {
+	logFields := logrus.Fields{
+		"validatorIndex": proposerId,
+		"slot":           slot,
+		"headRoot":       fmt.Sprintf("%#x", parentRoot),
+	}
+	payloadId, ok := vs.PayloadIDCache.PayloadID(slot, parentRoot)
+
+	val, tracked := vs.TrackedValidatorsCache.Validator(proposerId)
 	if !tracked {
 		logrus.WithFields(logFields).Warn("could not find tracked proposer index")
 	}
 	setFeeRecipientIfBurnAddress(&val)
 
-	var err error
 	if ok && payloadId != [8]byte{} {
 		// Payload ID is cache hit. Return the cached payload ID.
 		var pid primitives.PayloadID
@@ -90,7 +101,7 @@ func (vs *Server) getLocalPayload(ctx context.Context, blk interfaces.ReadOnlyBe
 			return nil, errors.Wrap(err, "could not get cached payload from execution client")
 		}
 	}
-	log.WithFields(logFields).Debug("payload ID cache miss")
+	log.WithFields(logFields).Debug("Payload ID cache miss")
 	parentHash, err := vs.getParentBlockHash(ctx, st, slot)
 	switch {
 	case errors.Is(err, errActivationNotReached) || errors.Is(err, errNoTerminalBlockHash):
@@ -125,7 +136,7 @@ func (vs *Server) getLocalPayload(ctx context.Context, blk interfaces.ReadOnlyBe
 	}
 	var attr payloadattribute.Attributer
 	switch st.Version() {
-	case version.Deneb, version.Electra:
+	case version.Deneb, version.Electra, version.Fulu:
 		withdrawals, _, err := st.ExpectedWithdrawals()
 		if err != nil {
 			return nil, err
@@ -135,7 +146,7 @@ func (vs *Server) getLocalPayload(ctx context.Context, blk interfaces.ReadOnlyBe
 			PrevRandao:            random,
 			SuggestedFeeRecipient: val.FeeRecipient[:],
 			Withdrawals:           withdrawals,
-			ParentBeaconBlockRoot: headRoot[:],
+			ParentBeaconBlockRoot: parentRoot[:],
 		})
 		if err != nil {
 			return nil, err
@@ -179,7 +190,7 @@ func (vs *Server) getLocalPayload(ctx context.Context, blk interfaces.ReadOnlyBe
 	}
 
 	warnIfFeeRecipientDiffers(val.FeeRecipient[:], res.ExecutionData.FeeRecipient())
-	log.WithField("value", res.Bid).Debug("received execution payload from local engine")
+	log.WithField("value", res.Bid).Debug("Received execution payload from local engine")
 	return res, nil
 }
 
@@ -228,7 +239,8 @@ func (vs *Server) getTerminalBlockHashIfExists(ctx context.Context, transitionTi
 
 func (vs *Server) getBuilderPayloadAndBlobs(ctx context.Context,
 	slot primitives.Slot,
-	vIdx primitives.ValidatorIndex) (builder.Bid, error) {
+	vIdx primitives.ValidatorIndex,
+	parentGasLimit uint64) (builder.Bid, error) {
 	ctx, span := trace.StartSpan(ctx, "ProposerServer.getBuilderPayloadAndBlobs")
 	defer span.End()
 
@@ -239,12 +251,12 @@ func (vs *Server) getBuilderPayloadAndBlobs(ctx context.Context,
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to check if we can use the builder")
 	}
-	span.AddAttributes(trace.BoolAttribute("canUseBuilder", canUseBuilder))
+	span.SetAttributes(trace.BoolAttribute("canUseBuilder", canUseBuilder))
 	if !canUseBuilder {
 		return nil, nil
 	}
 
-	return vs.getPayloadHeaderFromBuilder(ctx, slot, vIdx)
+	return vs.getPayloadHeaderFromBuilder(ctx, slot, vIdx, parentGasLimit)
 }
 
 var errActivationNotReached = errors.New("activation epoch not reached")

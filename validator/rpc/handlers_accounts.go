@@ -18,13 +18,13 @@ import (
 	fieldparams "github.com/prysmaticlabs/prysm/v5/config/fieldparams"
 	"github.com/prysmaticlabs/prysm/v5/crypto/bls"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	"github.com/prysmaticlabs/prysm/v5/network/httputil"
 	"github.com/prysmaticlabs/prysm/v5/validator/accounts"
 	"github.com/prysmaticlabs/prysm/v5/validator/accounts/petnames"
 	"github.com/prysmaticlabs/prysm/v5/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/v5/validator/keymanager/derived"
 	"github.com/prysmaticlabs/prysm/v5/validator/keymanager/local"
-	"go.opencensus.io/trace"
 )
 
 // ListAccounts allows retrieval of validating keys and their petnames
@@ -131,7 +131,7 @@ func (s *Server) BackupAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.PublicKeys == nil || len(req.PublicKeys) < 1 {
+	if len(req.PublicKeys) < 1 {
 		httputil.HandleError(w, "No public keys specified to backup", http.StatusBadRequest)
 		return
 	}
