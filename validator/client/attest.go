@@ -17,13 +17,13 @@ import (
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
 	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	validatorpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1/validator-client"
 	prysmTime "github.com/prysmaticlabs/prysm/v5/time"
 	"github.com/prysmaticlabs/prysm/v5/time/slots"
 	"github.com/prysmaticlabs/prysm/v5/validator/client/iface"
 	"github.com/sirupsen/logrus"
-	"go.opencensus.io/trace"
 )
 
 var failedAttLocalProtectionErr = "attempted to make slashable attestation, rejected by local slashing protection"
@@ -35,7 +35,7 @@ var failedAttLocalProtectionErr = "attempted to make slashable attestation, reje
 func (v *validator) SubmitAttestation(ctx context.Context, slot primitives.Slot, pubKey [fieldparams.BLSPubkeyLength]byte) {
 	ctx, span := trace.StartSpan(ctx, "validator.SubmitAttestation")
 	defer span.End()
-	span.AddAttributes(trace.StringAttribute("validator", fmt.Sprintf("%#x", pubKey)))
+	span.SetAttributes(trace.StringAttribute("validator", fmt.Sprintf("%#x", pubKey)))
 
 	v.waitOneThirdOrValidBlock(ctx, slot)
 
@@ -122,52 +122,46 @@ func (v *validator) SubmitAttestation(ctx context.Context, slot primitives.Slot,
 		return
 	}
 
-	var indexInCommittee uint64
-	var found bool
-	for i, vID := range duty.Committee {
-		if vID == duty.ValidatorIndex {
-			indexInCommittee = uint64(i)
-			found = true
-			break
-		}
-	}
-	if !found {
-		log.Errorf("Validator ID %d not found in committee of %v", duty.ValidatorIndex, duty.Committee)
-		if v.emitAccountMetrics {
-			ValidatorAttestFailVec.WithLabelValues(fmtKey).Inc()
-		}
+	// Send the attestation to the beacon node.
+	if err := v.db.SlashableAttestationCheck(ctx, indexedAtt, pubKey, signingRoot, v.emitAccountMetrics, ValidatorAttestFailVec); err != nil {
+		log.WithError(err).Error("Failed attestation slashing protection check")
+		log.WithFields(
+			attestationLogFields(pubKey, indexedAtt),
+		).Debug("Attempted slashable attestation details")
+		tracing.AnnotateError(span, err)
 		return
 	}
 
-	// TODO: Extend to Electra
-	phase0Att, ok := indexedAtt.(*ethpb.IndexedAttestation)
-	if ok {
-		// Send the attestation to the beacon node.
-		if err := v.db.SlashableAttestationCheck(ctx, phase0Att, pubKey, signingRoot, v.emitAccountMetrics, ValidatorAttestFailVec); err != nil {
-			log.WithError(err).Error("Failed attestation slashing protection check")
-			log.WithFields(
-				attestationLogFields(pubKey, indexedAtt),
-			).Debug("Attempted slashable attestation details")
-			tracing.AnnotateError(span, err)
-			return
-		}
-	}
-
-	aggregationBitfield := bitfield.NewBitlist(uint64(len(duty.Committee)))
-	aggregationBitfield.SetBitAt(indexInCommittee, true)
-	committeeBits := primitives.NewAttestationCommitteeBits()
+	var aggregationBitfield bitfield.Bitlist
 
 	var attResp *ethpb.AttestResponse
 	if postElectra {
-		attestation := &ethpb.AttestationElectra{
-			Data:            data,
-			AggregationBits: aggregationBitfield,
-			CommitteeBits:   committeeBits,
-			Signature:       sig,
+		attestation := &ethpb.SingleAttestation{
+			Data:          data,
+			AttesterIndex: duty.ValidatorIndex,
+			CommitteeId:   duty.CommitteeIndex,
+			Signature:     sig,
 		}
-		attestation.CommitteeBits.SetBitAt(uint64(req.CommitteeIndex), true)
 		attResp, err = v.validatorClient.ProposeAttestationElectra(ctx, attestation)
 	} else {
+		var indexInCommittee uint64
+		var found bool
+		for i, vID := range duty.Committee {
+			if vID == duty.ValidatorIndex {
+				indexInCommittee = uint64(i)
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Errorf("Validator ID %d not found in committee of %v", duty.ValidatorIndex, duty.Committee)
+			if v.emitAccountMetrics {
+				ValidatorAttestFailVec.WithLabelValues(fmtKey).Inc()
+			}
+			return
+		}
+		aggregationBitfield = bitfield.NewBitlist(uint64(len(duty.Committee)))
+		aggregationBitfield.SetBitAt(indexInCommittee, true)
 		attestation := &ethpb.Attestation{
 			Data:            data,
 			AggregationBits: aggregationBitfield,
@@ -193,18 +187,19 @@ func (v *validator) SubmitAttestation(ctx context.Context, slot primitives.Slot,
 		return
 	}
 
-	span.AddAttributes(
+	span.SetAttributes(
 		trace.Int64Attribute("slot", int64(slot)), // lint:ignore uintcast -- This conversion is OK for tracing.
 		trace.StringAttribute("attestationHash", fmt.Sprintf("%#x", attResp.AttestationDataRoot)),
 		trace.StringAttribute("blockRoot", fmt.Sprintf("%#x", data.BeaconBlockRoot)),
 		trace.Int64Attribute("justifiedEpoch", int64(data.Source.Epoch)),
 		trace.Int64Attribute("targetEpoch", int64(data.Target.Epoch)),
-		trace.StringAttribute("aggregationBitfield", fmt.Sprintf("%#x", aggregationBitfield)),
 	)
 	if postElectra {
-		span.AddAttributes(trace.StringAttribute("committeeBitfield", fmt.Sprintf("%#x", committeeBits)))
+		span.SetAttributes(trace.Int64Attribute("attesterIndex", int64(duty.ValidatorIndex)))
+		span.SetAttributes(trace.Int64Attribute("committeeIndex", int64(duty.CommitteeIndex)))
 	} else {
-		span.AddAttributes(trace.Int64Attribute("committeeIndex", int64(data.CommitteeIndex)))
+		span.SetAttributes(trace.StringAttribute("aggregationBitfield", fmt.Sprintf("%#x", aggregationBitfield)))
+		span.SetAttributes(trace.Int64Attribute("committeeIndex", int64(data.CommitteeIndex)))
 	}
 
 	if v.emitAccountMetrics {
