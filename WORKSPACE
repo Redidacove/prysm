@@ -16,6 +16,34 @@ load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
 
 rules_pkg_dependencies()
 
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "toolchains_protoc",
+    sha256 = "abb1540f8a9e045422730670ebb2f25b41fa56ca5a7cf795175a110a0a68f4ad",
+    strip_prefix = "toolchains_protoc-0.3.6",
+    url = "https://github.com/aspect-build/toolchains_protoc/releases/download/v0.3.6/toolchains_protoc-v0.3.6.tar.gz",
+)
+
+load("@toolchains_protoc//protoc:repositories.bzl", "rules_protoc_dependencies")
+
+rules_protoc_dependencies()
+
+load("@rules_proto//proto:repositories.bzl", "rules_proto_dependencies")
+
+rules_proto_dependencies()
+
+load("@bazel_features//:deps.bzl", "bazel_features_deps")
+
+bazel_features_deps()
+
+load("@toolchains_protoc//protoc:toolchain.bzl", "protoc_toolchains")
+
+protoc_toolchains(
+    name = "protoc_toolchains",
+    version = "v25.3",
+)
+
 HERMETIC_CC_TOOLCHAIN_VERSION = "v3.0.1"
 
 http_archive(
@@ -101,9 +129,9 @@ http_archive(
 
 http_archive(
     name = "aspect_bazel_lib",
-    sha256 = "f5ea76682b209cc0bd90d0f5a3b26d2f7a6a2885f0c5f615e72913f4805dbb0d",
-    strip_prefix = "bazel-lib-2.5.0",
-    url = "https://github.com/aspect-build/bazel-lib/releases/download/v2.5.0/bazel-lib-v2.5.0.tar.gz",
+    sha256 = "a272d79bb0ac6b6965aa199b1f84333413452e87f043b53eca7f347a23a478e8",
+    strip_prefix = "bazel-lib-2.9.3",
+    url = "https://github.com/bazel-contrib/bazel-lib/releases/download/v2.9.3/bazel-lib-v2.9.3.tar.gz",
 )
 
 load("@aspect_bazel_lib//lib:repositories.bzl", "aspect_bazel_lib_dependencies", "aspect_bazel_lib_register_toolchains")
@@ -137,10 +165,10 @@ http_archive(
         # Expose internals of go_test for custom build transitions.
         "//third_party:io_bazel_rules_go_test.patch",
     ],
-    sha256 = "80a98277ad1311dacd837f9b16db62887702e9f1d1c4c9f796d0121a46c8e184",
+    sha256 = "b2038e2de2cace18f032249cb4bb0048abf583a36369fa98f687af1b3f880b26",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.46.0/rules_go-v0.46.0.zip",
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.46.0/rules_go-v0.46.0.zip",
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.48.1/rules_go-v0.48.1.zip",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.48.1/rules_go-v0.48.1.zip",
     ],
 )
 
@@ -165,7 +193,7 @@ load("@rules_oci//oci:pull.bzl", "oci_pull")
 oci_pull(
     name = "linux_debian11_multiarch_base",  # Debian bullseye
     digest = "sha256:b82f113425c5b5c714151aaacd8039bc141821cdcd3c65202d42bdf9c43ae60b",  # 2023-12-12
-    image = "gcr.io/distroless/cc-debian11",
+    image = "gcr.io/prysmaticlabs/distroless/cc-debian11",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
@@ -182,7 +210,7 @@ load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_depe
 go_rules_dependencies()
 
 go_register_toolchains(
-    go_version = "1.22.4",
+    go_version = "1.23.5",
     nogo = "@//:nogo",
 )
 
@@ -227,7 +255,7 @@ filegroup(
     url = "https://github.com/ethereum/EIPs/archive/5480440fe51742ed23342b68cf106cefd427e39d.tar.gz",
 )
 
-consensus_spec_version = "v1.5.0-alpha.3"
+consensus_spec_version = "v1.5.0-beta.2"
 
 bls_test_version = "v0.1.1"
 
@@ -243,7 +271,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
     """,
-    integrity = "sha256-+byv+GUOQytex5GgtjBGVoNDseJZbiBdAjEtlgCbjEo=",
+    integrity = "sha256-X/bMxbKg1clo2aFEjBoeuFq/U+BF1eQopgRP/7nI3Qg=",
     url = "https://github.com/ethereum/consensus-spec-tests/releases/download/%s/general.tar.gz" % consensus_spec_version,
 )
 
@@ -259,7 +287,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
     """,
-    integrity = "sha256-JJUy/jT1h3kGQkinTuzL7gMOA1+qgmPgJXVrYuH63Cg=",
+    integrity = "sha256-WSxdri5OJGuNApW+odKle5UzToDyEOx+F3lMiqamJAg=",
     url = "https://github.com/ethereum/consensus-spec-tests/releases/download/%s/minimal.tar.gz" % consensus_spec_version,
 )
 
@@ -275,7 +303,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
     """,
-    integrity = "sha256-T2VM4Qd0SwgGnTjWxjOX297DqEsovO9Ueij1UEJy48Y=",
+    integrity = "sha256-LYE8l3y/zSt4YVrehrJ3ralqtgeYNildiIp+HR6+xAI=",
     url = "https://github.com/ethereum/consensus-spec-tests/releases/download/%s/mainnet.tar.gz" % consensus_spec_version,
 )
 
@@ -290,7 +318,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
     """,
-    integrity = "sha256-OP9BCBcQ7i+93bwj7ktY8pZ5uWsGjgTe4XTp7BDhX+I=",
+    integrity = "sha256-jvZQ90qcJMTOqMsPO7sgeEVQmewZTHcz7LVDkNqwTFQ=",
     strip_prefix = "consensus-specs-" + consensus_spec_version[1:],
     url = "https://github.com/ethereum/consensus-specs/archive/refs/tags/%s.tar.gz" % consensus_spec_version,
 )
@@ -340,6 +368,22 @@ filegroup(
     integrity = "sha256-b7ZTT+olF+VXEJYNTV5jggNtCkt9dOejm1i2VE+zy+0=",
     strip_prefix = "holesky-874c199423ccd180607320c38cbaca05d9a1573a",
     url = "https://github.com/eth-clients/holesky/archive/874c199423ccd180607320c38cbaca05d9a1573a.tar.gz",  # 2024-06-18
+)
+
+http_archive(
+    name = "sepolia_testnet",
+    build_file_content = """
+filegroup(
+    name = "configs",
+    srcs = [
+        "metadata/config.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+""",
+    integrity = "sha256-cY/UgpCcYEhQf7JefD65FI8tn/A+rAvKhcm2/qiVdqY=",
+    strip_prefix = "sepolia-f2c219a93c4491cee3d90c18f2f8e82aed850eab",
+    url = "https://github.com/eth-clients/sepolia/archive/f2c219a93c4491cee3d90c18f2f8e82aed850eab.tar.gz",  # 2024-09-19
 )
 
 http_archive(
