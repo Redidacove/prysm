@@ -97,6 +97,13 @@ func TestVerifyBitfieldLength_OK(t *testing.T) {
 	assert.NoError(t, helpers.VerifyBitfieldLength(bf, committeeSize), "Bitfield is not validated when it was supposed to be")
 }
 
+func TestVerifyBitfieldLength_Incorrect(t *testing.T) {
+	helpers.ClearCache()
+
+	bf := bitfield.NewBitlist(1)
+	require.ErrorContains(t, "wanted participants bitfield length 2, got: 1", helpers.VerifyBitfieldLength(bf, 2))
+}
+
 func TestCommitteeAssignments_CannotRetrieveFutureEpoch(t *testing.T) {
 	helpers.ClearCache()
 
@@ -403,7 +410,12 @@ func TestVerifyAttestationBitfieldLengths_OK(t *testing.T) {
 		helpers.ClearCache()
 
 		require.NoError(t, state.SetSlot(tt.stateSlot))
-		err := helpers.VerifyAttestationBitfieldLengths(context.Background(), state, tt.attestation)
+		att := tt.attestation
+		// Verify attesting indices are correct.
+		committee, err := helpers.BeaconCommitteeFromState(context.Background(), state, att.GetData().Slot, att.GetData().CommitteeIndex)
+		require.NoError(t, err)
+		require.NotNil(t, committee)
+		err = helpers.VerifyBitfieldLength(att.GetAggregationBits(), uint64(len(committee)))
 		if tt.verificationFailure {
 			assert.NotNil(t, err, "Verification succeeded when it was supposed to fail")
 		} else {
