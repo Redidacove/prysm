@@ -12,13 +12,14 @@ import (
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/state"
 	fieldparams "github.com/prysmaticlabs/prysm/v5/config/fieldparams"
 	"github.com/prysmaticlabs/prysm/v5/config/params"
+	consensus_blocks "github.com/prysmaticlabs/prysm/v5/consensus-types/blocks"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/forkchoice"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/interfaces"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	"github.com/prysmaticlabs/prysm/v5/time/slots"
-	"go.opencensus.io/trace"
 )
 
 // ChainInfoFetcher defines a common interface for methods in blockchain service which
@@ -44,7 +45,7 @@ type ForkchoiceFetcher interface {
 	UpdateHead(context.Context, primitives.Slot)
 	HighestReceivedBlockSlot() primitives.Slot
 	ReceivedBlocksLastEpoch() (uint64, error)
-	InsertNode(context.Context, state.BeaconState, [32]byte) error
+	InsertNode(context.Context, state.BeaconState, consensus_blocks.ROBlock) error
 	ForkChoiceDump(context.Context) (*forkchoice.Dump, error)
 	NewSlot(context.Context, primitives.Slot) error
 	ProposerBoost() [32]byte
@@ -203,7 +204,7 @@ func (s *Service) HeadState(ctx context.Context) (state.BeaconState, error) {
 	defer s.headLock.RUnlock()
 
 	ok := s.hasHeadState()
-	span.AddAttributes(trace.BoolAttribute("cache_hit", ok))
+	span.SetAttributes(trace.BoolAttribute("cache_hit", ok))
 
 	if ok {
 		return s.headState(ctx), nil
@@ -225,7 +226,7 @@ func (s *Service) HeadStateReadOnly(ctx context.Context) (state.ReadOnlyBeaconSt
 	defer s.headLock.RUnlock()
 
 	ok := s.hasHeadState()
-	span.AddAttributes(trace.BoolAttribute("cache_hit", ok))
+	span.SetAttributes(trace.BoolAttribute("cache_hit", ok))
 
 	if ok {
 		return s.headStateReadOnly(ctx), nil
@@ -242,7 +243,7 @@ func (s *Service) HeadValidatorsIndices(ctx context.Context, epoch primitives.Ep
 	if !s.hasHeadState() {
 		return []primitives.ValidatorIndex{}, nil
 	}
-	return helpers.ActiveValidatorIndices(ctx, s.headState(ctx), epoch)
+	return helpers.ActiveValidatorIndices(ctx, s.headStateReadOnly(ctx), epoch)
 }
 
 // HeadGenesisValidatorsRoot returns genesis validators root of the head state.
