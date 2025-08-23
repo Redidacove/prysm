@@ -8,9 +8,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	fieldparams "github.com/prysmaticlabs/prysm/v5/config/fieldparams"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	"github.com/prysmaticlabs/prysm/v5/validator/db/common"
-	"go.opencensus.io/trace"
 )
 
 const failedAttLocalProtectionErr = "attempted to make slashable attestation, rejected by local slashing protection"
@@ -131,10 +131,9 @@ func (s *Store) SaveAttestationForPubKey(
 	att ethpb.IndexedAtt,
 ) error {
 	// If there is no attestation, return on error.
-	if att == nil || att.GetData() == nil || att.GetData().Source == nil || att.GetData().Target == nil {
+	if att == nil || att.IsNil() || att.GetData().Source == nil || att.GetData().Target == nil {
 		return errors.New("incoming attestation does not contain source and/or target epoch")
 	}
-
 	// Get validator slashing protection.
 	validatorSlashingProtection, err := s.validatorSlashingProtection(pubkey)
 	if err != nil {
