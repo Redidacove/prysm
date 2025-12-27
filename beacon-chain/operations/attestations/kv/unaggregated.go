@@ -4,20 +4,19 @@ import (
 	"context"
 
 	"github.com/pkg/errors"
-	"github.com/prysmaticlabs/prysm/v5/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	"github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1/attestation"
 	"github.com/prysmaticlabs/prysm/v5/runtime/version"
-	"go.opencensus.io/trace"
 )
 
 // SaveUnaggregatedAttestation saves an unaggregated attestation in cache.
 func (c *AttCaches) SaveUnaggregatedAttestation(att ethpb.Att) error {
-	if att == nil {
+	if att == nil || att.IsNil() {
 		return nil
 	}
-	if helpers.IsAggregated(att) {
+	if att.IsAggregated() {
 		return errors.New("attestation is aggregated")
 	}
 
@@ -116,7 +115,7 @@ func (c *AttCaches) UnaggregatedAttestationsBySlotIndexElectra(
 
 	unAggregatedAtts := c.unAggregatedAtt
 	for _, a := range unAggregatedAtts {
-		if a.Version() == version.Electra && slot == a.GetData().Slot && a.CommitteeBitsVal().BitAt(uint64(committeeIndex)) {
+		if a.Version() >= version.Electra && slot == a.GetData().Slot && a.CommitteeBitsVal().BitAt(uint64(committeeIndex)) {
 			att, ok := a.(*ethpb.AttestationElectra)
 			// This will never fail in practice because we asserted the version
 			if ok {
@@ -130,10 +129,10 @@ func (c *AttCaches) UnaggregatedAttestationsBySlotIndexElectra(
 
 // DeleteUnaggregatedAttestation deletes the unaggregated attestations in cache.
 func (c *AttCaches) DeleteUnaggregatedAttestation(att ethpb.Att) error {
-	if att == nil {
+	if att == nil || att.IsNil() {
 		return nil
 	}
-	if helpers.IsAggregated(att) {
+	if att.IsAggregated() {
 		return errors.New("attestation is aggregated")
 	}
 
@@ -161,7 +160,7 @@ func (c *AttCaches) DeleteSeenUnaggregatedAttestations() (int, error) {
 
 	count := 0
 	for r, att := range c.unAggregatedAtt {
-		if att == nil || helpers.IsAggregated(att) {
+		if att == nil || att.IsNil() || att.IsAggregated() {
 			continue
 		}
 		if seen, err := c.hasSeenBit(att); err == nil && seen {

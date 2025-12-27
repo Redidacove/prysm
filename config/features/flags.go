@@ -28,9 +28,9 @@ var (
 		Name:  "dev",
 		Usage: "Enables experimental features still in development. These features may not be stable.",
 	}
-	enableExperimentalState = &cli.BoolFlag{
-		Name:  "enable-experimental-state",
-		Usage: "Turns on the latest and greatest (but potentially unstable) changes to the beacon state.",
+	disableExperimentalState = &cli.BoolFlag{
+		Name:  "disable-experimental-state",
+		Usage: "Turns off the latest and greatest changes to the beacon state. Disabling this is safe to do after the feature has been enabled.",
 	}
 	writeSSZStateTransitionsFlag = &cli.BoolFlag{
 		Name:  "interop-write-ssz-state-transitions",
@@ -144,7 +144,7 @@ var (
 		Usage: "Informs the engine to prepare all local payloads. Useful for relayers and builders.",
 	}
 	EnableLightClient = &cli.BoolFlag{
-		Name:  "enable-lightclient",
+		Name:  "enable-light-client",
 		Usage: "Enables the light client support in the beacon node",
 	}
 	disableResourceManager = &cli.BoolFlag{
@@ -161,22 +161,28 @@ var (
 		Name:  "blob-save-fsync",
 		Usage: "Forces new blob files to be fysnc'd before continuing, ensuring durable blob writes.",
 	}
-	// EnableQUIC enables connection using the QUIC protocol for peers which support it.
-	EnableQUIC = &cli.BoolFlag{
-		Name:  "enable-quic",
-		Usage: "Enables connection using the QUIC protocol for peers which support it.",
+	// DisableQUIC disables connecting to peers using the QUIC protocol.
+	DisableQUIC = &cli.BoolFlag{
+		Name:  "disable-quic",
+		Usage: "Disables connecting using the QUIC protocol with peers.",
 	}
-	EnableCommitteeAwarePacking = &cli.BoolFlag{
-		Name:  "enable-committee-aware-packing",
-		Usage: "Changes the attestation packing algorithm to one that is aware of attesting committees.",
+	DisableCommitteeAwarePacking = &cli.BoolFlag{
+		Name:  "disable-committee-aware-packing",
+		Usage: "Changes the attestation packing algorithm to one that is not aware of attesting committees.",
+	}
+	EnableDiscoveryReboot = &cli.BoolFlag{
+		Name:  "enable-discovery-reboot",
+		Usage: "Experimental: Enables the discovery listener to rebooted in the event of connectivity issues.",
+	}
+	enableExperimentalAttestationPool = &cli.BoolFlag{
+		Name:  "enable-experimental-attestation-pool",
+		Usage: "Enables an experimental attestation pool design.",
 	}
 )
 
 // devModeFlags holds list of flags that are set when development mode is on.
 var devModeFlags = []cli.Flag{
-	enableExperimentalState,
 	backfill.EnableExperimentalBackfill,
-	EnableQUIC,
 }
 
 // ValidatorFlags contains a list of all the feature flags that apply to the validator client.
@@ -199,9 +205,9 @@ var E2EValidatorFlags = []string{
 }
 
 // BeaconChainFlags contains a list of all the feature flags that apply to the beacon-chain client.
-var BeaconChainFlags = append(deprecatedBeaconFlags, append(deprecatedFlags, []cli.Flag{
+var BeaconChainFlags = combinedFlags([]cli.Flag{
 	devModeFlag,
-	enableExperimentalState,
+	disableExperimentalState,
 	writeSSZStateTransitionsFlag,
 	saveInvalidBlockTempFlag,
 	saveInvalidBlobTempFlag,
@@ -212,7 +218,6 @@ var BeaconChainFlags = append(deprecatedBeaconFlags, append(deprecatedFlags, []c
 	disablePeerScorer,
 	disableBroadcastSlashingFlag,
 	enableSlasherFlag,
-	enableHistoricalSpaceRepresentation,
 	disableStakinContractCheck,
 	SaveFullExecutionPayloads,
 	enableStartupOptimistic,
@@ -226,9 +231,22 @@ var BeaconChainFlags = append(deprecatedBeaconFlags, append(deprecatedFlags, []c
 	DisableRegistrationCache,
 	EnableLightClient,
 	BlobSaveFsync,
-	EnableQUIC,
-	EnableCommitteeAwarePacking,
-}...)...)
+	DisableQUIC,
+	DisableCommitteeAwarePacking,
+	EnableDiscoveryReboot,
+	enableExperimentalAttestationPool,
+}, deprecatedBeaconFlags, deprecatedFlags, upcomingDeprecation)
+
+func combinedFlags(flags ...[]cli.Flag) []cli.Flag {
+	if len(flags) == 0 {
+		return []cli.Flag{}
+	}
+	collected := flags[0]
+	for _, f := range flags[1:] {
+		collected = append(collected, f...)
+	}
+	return collected
+}
 
 // E2EBeaconChainFlags contains a list of the beacon chain feature flags to be tested in E2E.
 var E2EBeaconChainFlags = []string{
