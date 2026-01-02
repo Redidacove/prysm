@@ -11,10 +11,10 @@ import (
 	eventClient "github.com/prysmaticlabs/prysm/v5/api/client/event"
 	"github.com/prysmaticlabs/prysm/v5/api/server/structs"
 	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
+	"github.com/prysmaticlabs/prysm/v5/monitoring/tracing/trace"
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	"github.com/prysmaticlabs/prysm/v5/validator/client/iface"
 	log "github.com/sirupsen/logrus"
-	"go.opencensus.io/trace"
 	"google.golang.org/grpc"
 )
 
@@ -71,7 +71,7 @@ func (c *grpcValidatorClient) ProposeAttestation(ctx context.Context, in *ethpb.
 	return c.beaconNodeValidatorClient.ProposeAttestation(ctx, in)
 }
 
-func (c *grpcValidatorClient) ProposeAttestationElectra(ctx context.Context, in *ethpb.AttestationElectra) (*ethpb.AttestResponse, error) {
+func (c *grpcValidatorClient) ProposeAttestationElectra(ctx context.Context, in *ethpb.SingleAttestation) (*ethpb.AttestResponse, error) {
 	return c.beaconNodeValidatorClient.ProposeAttestationElectra(ctx, in)
 }
 
@@ -125,10 +125,6 @@ func (c *grpcValidatorClient) ValidatorIndex(ctx context.Context, in *ethpb.Vali
 
 func (c *grpcValidatorClient) ValidatorStatus(ctx context.Context, in *ethpb.ValidatorStatusRequest) (*ethpb.ValidatorStatusResponse, error) {
 	return c.beaconNodeValidatorClient.ValidatorStatus(ctx, in)
-}
-
-func (c *grpcValidatorClient) WaitForActivation(ctx context.Context, in *ethpb.ValidatorActivationRequest) (ethpb.BeaconNodeValidator_WaitForActivationClient, error) {
-	return c.beaconNodeValidatorClient.WaitForActivation(ctx, in)
 }
 
 // Deprecated: Do not use.

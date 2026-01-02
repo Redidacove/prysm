@@ -3,7 +3,6 @@ package execution
 import (
 	"context"
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -84,11 +83,15 @@ func (s *mockEngine) callCount(method string) int {
 }
 
 func mockParseUintList(t *testing.T, data json.RawMessage) []uint64 {
-	var list []uint64
+	var list []string
 	if err := json.Unmarshal(data, &list); err != nil {
 		t.Fatalf("failed to parse uint list: %v", err)
 	}
-	return list
+	uints := make([]uint64, len(list))
+	for i, u := range list {
+		uints[i] = hexutil.MustDecodeUint64(u)
+	}
+	return uints
 }
 
 func mockParseHexByteList(t *testing.T, data json.RawMessage) []hexutil.Bytes {
@@ -117,7 +120,7 @@ func TestParseRequest(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
 		method   string
-		uintArgs []uint64
+		hexArgs  []string // uint64 as hex
 		byteArgs []hexutil.Bytes
 	}{
 		{
@@ -128,33 +131,24 @@ func TestParseRequest(t *testing.T) {
 			},
 		},
 		{
-			method: GetPayloadBodiesByHashV2,
-			byteArgs: []hexutil.Bytes{
-				strToHexBytes(t, "0x656d707479000000000000000000000000000000000000000000000000000000"),
-				strToHexBytes(t, "0x66756c6c00000000000000000000000000000000000000000000000000000000"),
-			},
-		},
-		{
-			method:   GetPayloadBodiesByRangeV1,
-			uintArgs: []uint64{0, 1},
-		},
-		{
-			method:   GetPayloadBodiesByRangeV2,
-			uintArgs: []uint64{math.MaxUint64, 1},
+			method:  GetPayloadBodiesByRangeV1,
+			hexArgs: []string{hexutil.EncodeUint64(0), hexutil.EncodeUint64(1)},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.method, func(t *testing.T) {
 			cli, srv := newMockEngine(t)
-			srv.register(c.method, func(msg *jsonrpcMessage, w http.ResponseWriter, r *http.Request) {
+			srv.register(c.method, func(msg *jsonrpcMessage, w http.ResponseWriter, _ *http.Request) {
 				require.Equal(t, c.method, msg.Method)
 				nr := uint64(len(c.byteArgs))
 				if len(c.byteArgs) > 0 {
 					require.DeepEqual(t, c.byteArgs, mockParseHexByteList(t, msg.Params))
 				}
-				if len(c.uintArgs) > 0 {
+				if len(c.hexArgs) > 0 {
 					rang := mockParseUintList(t, msg.Params)
-					require.DeepEqual(t, c.uintArgs, rang)
+					for i, r := range rang {
+						require.Equal(t, c.hexArgs[i], hexutil.EncodeUint64(r))
+					}
 					nr = rang[1]
 				}
 				mockWriteResult(t, w, msg, make([]*pb.ExecutionPayloadBody, nr))
@@ -165,18 +159,18 @@ func TestParseRequest(t *testing.T) {
 			if len(c.byteArgs) > 0 {
 				args = []interface{}{c.byteArgs}
 			}
-			if len(c.uintArgs) > 0 {
-				args = make([]interface{}, len(c.uintArgs))
-				for i := range c.uintArgs {
-					args[i] = c.uintArgs[i]
+			if len(c.hexArgs) > 0 {
+				args = make([]interface{}, len(c.hexArgs))
+				for i := range c.hexArgs {
+					args[i] = c.hexArgs[i]
 				}
 			}
 			require.NoError(t, cli.CallContext(ctx, &result, c.method, args...))
 			if len(c.byteArgs) > 0 {
 				require.Equal(t, len(c.byteArgs), len(result))
 			}
-			if len(c.uintArgs) > 0 {
-				require.Equal(t, int(c.uintArgs[1]), len(result))
+			if len(c.hexArgs) > 0 {
+				require.Equal(t, int(hexutil.MustDecodeUint64(c.hexArgs[1])), len(result))
 			}
 		})
 	}
@@ -185,9 +179,7 @@ func TestParseRequest(t *testing.T) {
 func TestCallCount(t *testing.T) {
 	methods := []string{
 		GetPayloadBodiesByHashV1,
-		GetPayloadBodiesByHashV2,
 		GetPayloadBodiesByRangeV1,
-		GetPayloadBodiesByRangeV2,
 	}
 	cases := []struct {
 		method string
@@ -195,15 +187,13 @@ func TestCallCount(t *testing.T) {
 	}{
 		{method: GetPayloadBodiesByHashV1, count: 1},
 		{method: GetPayloadBodiesByHashV1, count: 2},
-		{method: GetPayloadBodiesByHashV2, count: 1},
 		{method: GetPayloadBodiesByRangeV1, count: 1},
 		{method: GetPayloadBodiesByRangeV1, count: 2},
-		{method: GetPayloadBodiesByRangeV2, count: 1},
 	}
 	for _, c := range cases {
 		t.Run(c.method, func(t *testing.T) {
 			cli, srv := newMockEngine(t)
-			srv.register(c.method, func(msg *jsonrpcMessage, w http.ResponseWriter, r *http.Request) {
+			srv.register(c.method, func(msg *jsonrpcMessage, w http.ResponseWriter, _ *http.Request) {
 				mockWriteResult(t, w, msg, nil)
 			})
 			for i := 0; i < c.count; i++ {
